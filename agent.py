@@ -1,3 +1,7 @@
+#Change Gamma
+#Change NN architecture
+
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -14,11 +18,22 @@ def discount_rewards(r, gamma):
 
 
 class Policy(torch.nn.Module):
+
     def __init__(self, state_space, action_space):
+
+        """Initializes MLP NNs to map, using forward function, states into
+        - actor: parameters of a normal distribution from which to sample the agent's actions N(mu(s(t)), sigma(s(t)))
+        - critic: estimate of the state value function V(s(t))
+               
+        args:
+            state_space: dimension of the observation space
+            action_space: dim of the action space
+            
+        """
         super().__init__()
         self.state_space = state_space
         self.action_space = action_space
-        self.hidden = 64
+        self.hidden = 128
         self.tanh = torch.nn.Tanh()
 
         """
@@ -39,9 +54,8 @@ class Policy(torch.nn.Module):
         """
         # TASK 3: critic network for actor-critic algorithm
         self.fc1_critic = torch.nn.Linear(state_space, self.hidden)
-        self.fc2_critic = torch.nn.Linear(self.hidden, self.hidden)
-        self.fc3_critic = torch.nn.Linear(self.hidden, self.hidden)        
-        self.fc4_critic = torch.nn.Linear(self.hidden, 1)
+        self.fc2_critic = torch.nn.Linear(self.hidden, self.hidden)       
+        self.fc3_critic = torch.nn.Linear(self.hidden, 1)
 
         self.init_weights()
 
@@ -54,6 +68,12 @@ class Policy(torch.nn.Module):
 
 
     def forward(self, x):
+        """
+        args: 
+            x: observation from the environment for the current state s(t)
+        """ 
+
+
         """
             Actor
         """
@@ -71,8 +91,7 @@ class Policy(torch.nn.Module):
         # TASK 3: forward in the critic network
         x_critic = self.tanh(self.fc1_critic(x))
         x_critic = self.tanh(self.fc2_critic(x_critic))
-        x_critic = self.tanh(self.fc3_critic(x_critic))
-        state_value = self.fc4_critic(x_critic)
+        state_value = self.fc3_critic(x_critic)
 
         return normal_dist, state_value #It's returning action distribution and the value of the state estimated by the critic
 
@@ -109,7 +128,6 @@ class Agent(object):
         done = torch.Tensor(self.done).to(self.train_device)
 
 
-        returns = discount_rewards(rewards,self.gamma)
 
         #Empty lists to prepare for next episode
 
@@ -125,7 +143,8 @@ class Agent(object):
             #It does not modify the expected value of the policy gradient (proof: grad(J) = E(grad(log(pi(a|s))) * (G_t - baseline)) = E(grad(log(pi(a|s)))*G_t)-b*E(grad(log(pi(a|s)))) = ... - 0 since expected value of the gradient of a probability is 0.
             #On the opposite it reduces the variance because it is centering all episodic returns around a value (e.g. 0 if baseline is the average
         if self.actor_critic == False:
-            #   - compute discounted returns    
+            #   - compute discounted returns
+            returns = discount_rewards(rewards,self.gamma)
             returns = returns - self.baseline
             #   - compute policy gradient loss function given actions and returns
             loss = - (action_log_probs*returns).mean()
@@ -135,22 +154,22 @@ class Agent(object):
             values = torch.stack(self.state_values).squeeze(-1)
             future_values = torch.stack(self.next_state_values).squeeze(-1)        
         #   - compute boostrapped discounted return estimates
-            bootstraped_returns = returns + self.gamma * future_values * (1 - done)
+            td_target  = rewards + self.gamma * future_values.detach() * (1 - done)
         #   - compute advantage terms
-            advantages = bootstraped_returns - values
+            advantages = (td_target  - values).detach()
         #   - compute actor loss and critic loss
             actor_loss = -(action_log_probs * advantages).mean()
-            critic_loss = F.mse_loss(values, bootstraped_returns)
+            critic_loss = F.mse_loss(values, td_target)
             loss = actor_loss + critic_loss
-
-    # compute gradients and step the optimizer     
-          
+        
+        # compute gradients and step the optimizer     
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
         self.optimizer.step()
         self.states, self.next_states, self.action_log_probs, self.rewards, self.done, self.state_values, self.next_state_values = [], [], [], [], [], [], []
 
-        return loss.item
+        return loss.item()
 
 
 
@@ -162,10 +181,10 @@ class Agent(object):
         value = state_value.squeeze(-1)
 
         if evaluation:  # Return mean
-            if self.actor_critic:
+            if self.actor_critic == True:
                 return normal_dist.mean, None, value
             else:
-                return normal_dist.mean, None, None
+                return normal_dist.mean, None, torch.tensor(0.0, device=self.train_device)
 
         else:   # Sample from the distribution
             action = normal_dist.sample()
@@ -173,10 +192,10 @@ class Agent(object):
             # Computes Log probability of the action [ log(p(a[0] AND a[1] AND a[2])) = log(p(a[0])*p(a[1])*p(a[2])) = log(p(a[0])) + log(p(a[1])) + log(p(a[2])) ]
             action_log_prob = normal_dist.log_prob(action).sum()
             
-            if self.actor_critic:
+            if self.actor_critic == True:
                 return action, action_log_prob, value
             else:
-                return action, action_log_prob, None
+                return action, action_log_prob, torch.tensor(0.0, device=self.train_device)
 
 
     def store_outcome(self, state, next_state, action_log_prob, reward, done, value = None, next_value = None):
@@ -185,7 +204,11 @@ class Agent(object):
         self.action_log_probs.append(action_log_prob)
         self.rewards.append(torch.Tensor([reward]))
         self.done.append(done)
-        if self.actor_critic:
+        if self.actor_critic == True:
             self.state_values.append(value.detach().view(1))
             self.next_state_values.append(next_value.detach().view(1))
+
+
+
+
 

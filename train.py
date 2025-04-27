@@ -11,14 +11,15 @@ from agent import Agent, Policy
 
 
 def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--n-episodes', default=20000, type=int, help='Number of training episodes')
-    parser.add_argument('--print-every', default=500, type=int, help='Print info every <> episodes')
-    parser.add_argument('--device', default='cpu', type=str, help='network device [cpu, cuda]')
-    parser.add_argument('--actor-critic', action='store_true', help='ActoriCritic if true else REINFORCE')
-    parser.add_argument('--baseline', default = 0, type=int, help='S net fixed baseline')
+	parser = argparse.ArgumentParser()
+	parser.add_argument('--n-episodes', default=100000, type=int, help='Number of training episodes')
+	parser.add_argument('--print-every', default=500, type=int, help='Print info every <> episodes')
+	parser.add_argument('--update-every', default=10, type=int, help='Update policy every <> episodes')
+	parser.add_argument('--device', default='cpu', type=str, help='network device [cpu, cuda]')
+	parser.add_argument('--actor-critic', action='store_true', help='ActoriCritic if true else REINFORCE')
+	parser.add_argument('--baseline', default = 0, type=int, help='S net fixed baseline')
 
-    return parser.parse_args()
+	return parser.parse_args()
 
 args = parse_args()
 
@@ -71,7 +72,8 @@ def main():
 			train_reward += reward
 			state = new_state
 
-		loss = agent.update_policy()
+		if (episode + 1) % args.update_every == 0:
+			loss = agent.update_policy()
 		
 		
 		if (episode + 1) % args.print_every == 0:

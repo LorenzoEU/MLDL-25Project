@@ -71,9 +71,12 @@ class Policy(torch.nn.Module):
         """
         args: 
             x: observation from the environment for the current state s(t)
-        """ 
 
-
+        returns:
+            normal_dist: parameters of the normal distribution from which to sample the agent's actions
+            state_value: estimate of the state value function V(s(t))
+        """
+        
         """
             Actor
         """
@@ -93,7 +96,7 @@ class Policy(torch.nn.Module):
         x_critic = self.tanh(self.fc2_critic(x_critic))
         state_value = self.fc3_critic(x_critic)
 
-        return normal_dist, state_value #It's returning action distribution and the value of the state estimated by the critic
+        return normal_dist, state_value
 
 
 class Agent(object):
@@ -117,7 +120,7 @@ class Agent(object):
         self.done = []
 
 
-    def update_policy(self):
+    def update_policy(self): #Update neural newtworks parameters
 
         action_log_probs = torch.stack(self.action_log_probs, dim=0).to(self.train_device).squeeze(-1)
         states = torch.stack(self.states, dim=0).to(self.train_device).squeeze(-1)
@@ -127,7 +130,8 @@ class Agent(object):
 
         done = torch.Tensor(self.done).to(self.train_device)
 
-
+        state_values = torch.stack(self.state_values, dim=0).to(self.train_device).squeeze(-1)
+        future_state_values = torch.stack(self.next_state_values, dim=0).to(self.train_device).squeeze(-1)
 
         #Empty lists to prepare for next episode
 
@@ -144,25 +148,22 @@ class Agent(object):
             #On the opposite it reduces the variance because it is centering all episodic returns around a value (e.g. 0 if baseline is the average
         if self.actor_critic == False:
             #   - compute discounted returns
-            returns = discount_rewards(rewards,self.gamma)
+            returns = discount_rewards(rewards,self.gamma) #G_t
             returns = returns - self.baseline
             #   - compute policy gradient loss function given actions and returns
             loss = - (action_log_probs*returns).mean()
 
         # TASK 3:
         if self.actor_critic:
-            values = torch.stack(self.state_values).squeeze(-1)
-            future_values = torch.stack(self.next_state_values).squeeze(-1)        
-        #   - compute boostrapped discounted return estimates
-            td_target  = rewards + self.gamma * future_values.detach() * (1 - done)
-        #   - compute advantage terms
-            advantages = (td_target  - values).detach()
-        #   - compute actor loss and critic loss
-            actor_loss = -(action_log_probs * advantages).mean()
-            critic_loss = F.mse_loss(values, td_target)
+            td_target = rewards + self.gamma * future_state_values * (1 - done)
+            advantages = (td_target - state_values).detach()
+            """ compute actor loss """
+            actor_loss = - (action_log_probs * advantages).mean()
+            """ compute critic loss """
+            critic_loss = F.mse_loss(state_values, td_target.detach())
+            """ compute total loss  """
             loss = actor_loss + critic_loss
-        
-        # compute gradients and step the optimizer     
+
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
@@ -180,17 +181,17 @@ class Agent(object):
         normal_dist, state_value = self.policy(x)
         value = state_value.squeeze(-1)
 
-        if evaluation:  # Return mean
+        if evaluation:  # Return mean of the action distribution
             if self.actor_critic == True:
                 return normal_dist.mean, None, value
             else:
                 return normal_dist.mean, None, torch.tensor(0.0, device=self.train_device)
 
-        else:   # Sample from the distribution
-            action = normal_dist.sample()
+        else:   # Sample a "random" action from the distribution (exploration)
+            action = normal_dist.sample() #A_t
 
             # Computes Log probability of the action [ log(p(a[0] AND a[1] AND a[2])) = log(p(a[0])*p(a[1])*p(a[2])) = log(p(a[0])) + log(p(a[1])) + log(p(a[2])) ]
-            action_log_prob = normal_dist.log_prob(action).sum()
+            action_log_prob = normal_dist.log_prob(action).sum() #log(pi(A_t|S_t))
             
             if self.actor_critic == True:
                 return action, action_log_prob, value
@@ -199,15 +200,15 @@ class Agent(object):
 
 
     def store_outcome(self, state, next_state, action_log_prob, reward, done, value = None, next_value = None):
-        self.states.append(torch.from_numpy(state).float())
-        self.next_states.append(torch.from_numpy(next_state).float())
-        self.action_log_probs.append(action_log_prob)
-        self.rewards.append(torch.Tensor([reward]))
+        """ Store the outcome of the action taken in the environment """
+        self.states.append(torch.from_numpy(state).float())                 #State S_t
+        self.next_states.append(torch.from_numpy(next_state).float())       #State S_{t+1}
+        self.action_log_probs.append(action_log_prob)                       #log(p(a|s))
+        self.rewards.append(torch.Tensor([reward]))                         #R_t
         self.done.append(done)
-        if self.actor_critic == True:
-            self.state_values.append(value.detach().view(1))
-            self.next_state_values.append(next_value.detach().view(1))
-
+        if self.actor_critic:
+            self.state_values.append(value.view(1))                         #V(S_t)
+            self.next_state_values.append(next_value.view(1))               #V(S_{t+1})
 
 
 

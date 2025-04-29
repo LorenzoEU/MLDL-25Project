@@ -12,7 +12,7 @@ from agent import Agent, Policy
 
 def parse_args():
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--n-episodes', default=100000, type=int, help='Number of training episodes')
+	parser.add_argument('--n-episodes', default=50000, type=int, help='Number of training episodes')
 	parser.add_argument('--print-every', default=500, type=int, help='Print info every <> episodes')
 	parser.add_argument('--update-every', default=10, type=int, help='Update policy every <> episodes')
 	parser.add_argument('--device', default='cpu', type=str, help='network device [cpu, cuda]')
@@ -21,10 +21,10 @@ def parse_args():
 
 	return parser.parse_args()
 
-args = parse_args()
 
 def main():
 
+	args = parse_args()
 	env = gym.make('CustomHopper-source-v0')
 	# env = gym.make('CustomHopper-target-v0')
 
@@ -49,8 +49,8 @@ def main():
 
 	for episode in range(args.n_episodes):
 		done = False
-		train_reward = 0
-		state = env.reset()  # Reset the environment and observe the initial state
+		train_reward = 0 #New reward
+		state = env.reset()  # Reset the environment to S_0 and observe the initial state
 
 		while not done:  # Loop until the episode is over
 			if args.actor_critic:
@@ -59,12 +59,11 @@ def main():
 				action, action_probabilities, _ = agent.get_action(state)
 			
 			new_state, reward, done, info = env.step(action.detach().cpu().numpy())
-
 			if args.actor_critic:
 				if not done:
 					_, _, next_value = agent.get_action(new_state, evaluation=True)
 				else:
-					next_value = torch.tensor(0.0, device=args.device).unsqueeze(0)
+					next_value = torch.tensor(0.0, device=args.device)
 				agent.store_outcome(state, new_state, action_probabilities, reward, done, value, next_value)
 			else:
 				agent.store_outcome(state, new_state, action_probabilities, reward, done)			

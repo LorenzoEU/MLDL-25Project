@@ -1,6 +1,6 @@
 #Change Gamma
 #Change NN architecture
-
+#Try using a Relu
 
 import numpy as np
 import torch
@@ -36,6 +36,7 @@ class Policy(torch.nn.Module):
         self.hidden = 128
         self.tanh = torch.nn.Tanh()
 
+
         """
             Actor network
         """
@@ -54,7 +55,7 @@ class Policy(torch.nn.Module):
         """
         # TASK 3: critic network for actor-critic algorithm
         self.fc1_critic = torch.nn.Linear(state_space, self.hidden)
-        self.fc2_critic = torch.nn.Linear(self.hidden, self.hidden)       
+        self.fc2_critic = torch.nn.Linear(self.hidden, self.hidden)
         self.fc3_critic = torch.nn.Linear(self.hidden, 1)
 
         self.init_weights()
@@ -63,7 +64,7 @@ class Policy(torch.nn.Module):
     def init_weights(self):
         for m in self.modules():
             if type(m) is torch.nn.Linear:
-                torch.nn.init.normal_(m.weight)
+                torch.nn.init.xavier_normal_(m.weight)
                 torch.nn.init.zeros_(m.bias)
 
 
@@ -108,7 +109,11 @@ class Agent(object):
 
         self.baseline = baseline
         self.gamma = 0.99
-        
+
+        self.state_mean = torch.zeros(11).to(self.train_device)
+        self.state_var = torch.ones(11).to(self.train_device)
+        self.state_count = 1e-5
+
         self.states = []
         self.next_states = []
 
@@ -119,22 +124,29 @@ class Agent(object):
         self.rewards = []
         self.done = []
 
+    """
+    def normalize_state(self, state):
+        state = torch.from_numpy(state).float().to(self.train_device)
+        self.state_count += 1
+        delta = state - self.state_mean
+        self.state_mean += delta / self.state_count
+        self.state_var += delta * (state - self.state_mean)
+        std = torch.sqrt(self.state_var / self.state_count)
+
+        # Normalize the state
+        normalized_state = (state - self.state_mean) / (std + 1e-8)
+        return normalized_state
+    """
 
     def update_policy(self): #Update neural newtworks parameters
 
-        action_log_probs = torch.stack(self.action_log_probs, dim=0).to(self.train_device).squeeze(-1)
-        states = torch.stack(self.states, dim=0).to(self.train_device).squeeze(-1)
-
-        next_states = torch.stack(self.next_states, dim=0).to(self.train_device).squeeze(-1)
-        rewards = torch.stack(self.rewards, dim=0).to(self.train_device).squeeze(-1)
-
+        action_log_probs = torch.stack(self.action_log_probs, dim=0).to(self.train_device)
+        states = torch.stack(self.states, dim=0).to(self.train_device)
+        rewards = torch.stack(self.rewards, dim=0).to(self.train_device).squeeze()
+        next_states = torch.stack(self.next_states, dim=0).to(self.train_device)
         done = torch.Tensor(self.done).to(self.train_device)
 
-        state_values = torch.stack(self.state_values, dim=0).to(self.train_device).squeeze(-1)
-        future_state_values = torch.stack(self.next_state_values, dim=0).to(self.train_device).squeeze(-1)
-
-        #Empty lists to prepare for next episode
-
+        if self.actor_critic == False:
         #
         # TASK 2:
         # 1. Analyze the performance of the trained policies in terms of reward and time consumption.
@@ -146,57 +158,69 @@ class Agent(object):
             #It reduces the variance of the policy gradient estimates, making training faster.
             #It does not modify the expected value of the policy gradient (proof: grad(J) = E(grad(log(pi(a|s))) * (G_t - baseline)) = E(grad(log(pi(a|s)))*G_t)-b*E(grad(log(pi(a|s)))) = ... - 0 since expected value of the gradient of a probability is 0.
             #On the opposite it reduces the variance because it is centering all episodic returns around a value (e.g. 0 if baseline is the average
-        if self.actor_critic == False:
+            #of the last k episodes) and thus it reduces the variance of the policy gradient estimates.
+
             #   - compute discounted returns
             returns = discount_rewards(rewards,self.gamma) #G_t
             returns = returns - self.baseline
+            returns = (returns - returns.mean()) / (returns.std() + 1e-8)
             #   - compute policy gradient loss function given actions and returns
-            loss = - (action_log_probs*returns).mean()
+            loss = -(action_log_probs*returns).mean()        
+
+        
 
         # TASK 3:
-        if self.actor_critic:
+        if self.actor_critic == True:
+            state_values = torch.stack(self.state_values, dim=0).to(self.train_device).squeeze()
+            future_state_values = torch.stack(self.next_state_values, dim=0).to(self.train_device).squeeze()
+
             td_target = rewards + self.gamma * future_state_values * (1 - done)
             advantages = (td_target - state_values).detach()
-            """ compute actor loss """
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            """ actor loss """
             actor_loss = - (action_log_probs * advantages).mean()
-            """ compute critic loss """
+            """ critic loss """
             critic_loss = F.mse_loss(state_values, td_target.detach())
-            """ compute total loss  """
             loss = actor_loss + critic_loss
 
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 1.0)
         self.optimizer.step()
+
+        #Empty lists to prepare for next episode
         self.states, self.next_states, self.action_log_probs, self.rewards, self.done, self.state_values, self.next_state_values = [], [], [], [], [], [], []
 
-        return loss.item()
+        return
 
 
 
     def get_action(self, state, evaluation=False):
-        """ state -> action (3-d), action_log_densities """
+        """ If normalization is used """
+        #state = self.normalize_state(state)
+        #x = state.to(self.train_device)
+
+        """ If normalization is not used """
         x = torch.from_numpy(state).float().to(self.train_device)
 
+
         normal_dist, state_value = self.policy(x)
-        value = state_value.squeeze(-1)
+        value = state_value.squeeze()
 
         if evaluation:  # Return mean of the action distribution
             if self.actor_critic == True:
                 return normal_dist.mean, None, value
             else:
-                return normal_dist.mean, None, torch.tensor(0.0, device=self.train_device)
+                return normal_dist.mean, None, None
 
         else:   # Sample a "random" action from the distribution (exploration)
             action = normal_dist.sample() #A_t
-
             # Computes Log probability of the action [ log(p(a[0] AND a[1] AND a[2])) = log(p(a[0])*p(a[1])*p(a[2])) = log(p(a[0])) + log(p(a[1])) + log(p(a[2])) ]
             action_log_prob = normal_dist.log_prob(action).sum() #log(pi(A_t|S_t))
-            
             if self.actor_critic == True:
                 return action, action_log_prob, value
             else:
-                return action, action_log_prob, torch.tensor(0.0, device=self.train_device)
+                return action, action_log_prob, None
 
 
     def store_outcome(self, state, next_state, action_log_prob, reward, done, value = None, next_value = None):
@@ -209,7 +233,5 @@ class Agent(object):
         if self.actor_critic:
             self.state_values.append(value.view(1))                         #V(S_t)
             self.next_state_values.append(next_value.view(1))               #V(S_{t+1})
-
-
 
 
